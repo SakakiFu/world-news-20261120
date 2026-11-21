@@ -1,65 +1,77 @@
-// News-image entry (Node 22, standard library only). The entry image is a fixed
-// 1024x1024 PNG summing up the world news of Friday 20 November 2026; it was
-// composed before submission, so this program only copies its bytes. Because the
-// output is a byte-for-byte copy of a fixed file, both grader runs produce
-// identical output.
+// main.ts — entrypoint for the make.fun news-image-20261120 entry.
 //
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// The image itself is a fixed 1024x1024 PNG summing up the world news of
+// Friday 20 November 2026. It was composed before submission, so this
+// program does not generate anything: it only copies the bytes of
+// entry.png into the output directory, after validating them.
+//
+// Outside the grader's container, MAKEFUN_OUTPUT_DIR can stand in for
+// /output, e.g.:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ONE_MIB = 1024 * 1024;
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
+const MAX_BYTES = 1024 * 1024;
+const EXPECTED_WIDTH = 1024;
+const EXPECTED_HEIGHT = 1024;
 
-function fail(message) {
-  throw new Error(message);
-}
+// PNG signature: 89 50 4E 47 0D 0A 1A 0A
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// JPEG SOI plus marker prefix: FF D8 FF
+const JPEG_PREFIX = Buffer.from([0xff, 0xd8, 0xff]);
 
-function checkPngDimensions(bytes) {
-  // A PNG stores its width and height as big-endian uint32 at offsets 16 and
-  // 20 (the IHDR chunk). The entry is composed at exactly 1024x1024.
-  if (bytes.length < 24) {
-    fail('entry.png is too short to hold a PNG header');
-  }
-  const width = bytes.readUInt32BE(16);
-  const height = bytes.readUInt32BE(20);
-  if (width !== 1024 || height !== 1024) {
-    fail(`entry.png is ${width}x${height}, expected 1024x1024`);
-  }
-}
-
-function main() {
+function main(): void {
   const here = dirname(fileURLToPath(import.meta.url));
-  const source = join(here, 'entry.png');
-  const bytes = readFileSync(source);
+  const sourcePath = join(here, "entry.png");
+  const bytes = readFileSync(sourcePath);
 
-  // The gate only accepts a PNG or JPEG at most 1 MiB; check both before writing.
-  if (bytes.length > ONE_MIB) {
-    fail(`entry.png is ${bytes.length} bytes, over the 1 MiB limit`);
+  if (bytes.length > MAX_BYTES) {
+    throw new Error(
+      `entry.png is ${bytes.length} bytes, over the 1 MiB limit (${MAX_BYTES} bytes)`,
+    );
   }
-  const isPng = bytes.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC);
-  const isJpeg = bytes.subarray(0, JPEG_MAGIC.length).equals(JPEG_MAGIC);
+
+  if (bytes.length < 24) {
+    throw new Error(
+      `entry.png is only ${bytes.length} bytes, too short to hold a PNG header`,
+    );
+  }
+
+  const isPng = bytes.subarray(0, 8).equals(PNG_SIGNATURE);
+  const isJpeg = bytes.subarray(0, 3).equals(JPEG_PREFIX);
   if (!isPng && !isJpeg) {
-    fail('entry.png is neither a PNG nor a JPEG');
-  }
-  if (isPng) {
-    checkPngDimensions(bytes);
+    throw new Error(
+      "entry.png is neither a PNG nor a JPEG: unrecognized file signature",
+    );
   }
 
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+  if (isPng) {
+    // In a PNG, the 8-byte signature is followed by the IHDR chunk: a
+    // 4-byte length, the 4-byte "IHDR" type, then width and height as
+    // big-endian uint32s at offsets 16 and 20.
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    if (width !== EXPECTED_WIDTH || height !== EXPECTED_HEIGHT) {
+      throw new Error(
+        `entry.png is ${width}x${height}, expected ${EXPECTED_WIDTH}x${EXPECTED_HEIGHT}`,
+      );
+    }
+  }
+
+  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
   mkdirSync(outDir, { recursive: true });
-  const outPath = join(outDir, 'entry.png');
+  const outPath = join(outDir, "entry.png");
   writeFileSync(outPath, bytes);
 
-  // Read it back and compare byte-for-byte: a partial or corrupted write
-  // must fail loudly instead of shipping a broken image.
+  // Read the output back and compare it byte-for-byte with the source, so a
+  // broken or truncated write fails loudly instead of shipping a bad image.
   const written = readFileSync(outPath);
   if (!written.equals(bytes)) {
-    fail('entry.png was not written back byte-for-byte');
+    throw new Error(
+      `output ${outPath} differs from ${sourcePath} after writing; refusing to ship a broken image`,
+    );
   }
 
   console.log(`wrote ${outPath} (${bytes.length} bytes)`);
